@@ -1,0 +1,161 @@
+import tkinter as tk
+from tkinter import ttk, messagebox
+import random
+import string
+import json
+import os
+from datetime import datetime
+
+HISTORY_FILE = "password_history.json"
+MIN_LEN = 4
+MAX_LEN = 128
+
+class PasswordGeneratorApp:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Random Password Generator / Генератор паролей")
+        self.root.geometry("650x520")
+        self.root.resizable(False, False)
+
+        self.history = []
+        self.load_history()
+        self._setup_ui()
+
+    def _setup_ui(self):
+        # --- Настройки ---
+        settings_frame = ttk.LabelFrame(self.root, text="Параметры генерации", padding=10)
+        settings_frame.pack(fill="x", padx=10, pady=5)
+
+        # Ползунок длины
+        self.length_var = tk.IntVar(value=12)
+        ttk.Label(settings_frame, text=f"Длина ({MIN_LEN}-{MAX_LEN}):").grid(row=0, column=0, sticky="w")
+        self.slider = ttk.Scale(settings_frame, from_=MIN_LEN, to=MAX_LEN, variable=self.length_var, orient="horizontal")
+        self.slider.grid(row=0, column=1, padx=5, sticky="we")
+        self.length_label = ttk.Label(settings_frame, textvariable=self.length_var)
+        self.length_label.grid(row=0, column=2, sticky="w")
+        self.slider.bind("<Motion>", lambda _: self.length_label.config(text=str(int(self.length_var.get()))))
+
+        # Чекбоксы
+        self.use_upper = tk.BooleanVar(value=True)
+        self.use_lower = tk.BooleanVar(value=True)
+        self.use_digits = tk.BooleanVar(value=True)
+        self.use_special = tk.BooleanVar(value=True)
+
+        chk_frame = ttk.Frame(settings_frame)
+        chk_frame.grid(row=1, column=0, columnspan=3, sticky="w", pady=5)
+        ttk.Checkbutton(chk_frame, text="A-Z (Заглавные)", variable=self.use_upper).pack(side="left", padx=5)
+        ttk.Checkbutton(chk_frame, text="a-z (Строчные)", variable=self.use_lower).pack(side="left", padx=5)
+        ttk.Checkbutton(chk_frame, text="0-9 (Цифры)", variable=self.use_digits).pack(side="left", padx=5)
+        ttk.Checkbutton(chk_frame, text="!@# (Спецсимволы)", variable=self.use_special).pack(side="left", padx=5)
+
+        # --- Управление и вывод ---
+        ctrl_frame = ttk.Frame(self.root, padding=10)
+        ctrl_frame.pack(fill="x", padx=10)
+
+        self.gen_btn = ttk.Button(ctrl_frame, text="🔑 Сгенерировать", command=self.generate_password)
+        self.gen_btn.pack(side="left", padx=(0, 10))
+
+        self.password_entry = ttk.Entry(ctrl_frame, font=("Consolas", 12), width=35)
+        self.password_entry.pack(side="left", fill="x", expand=True, padx=(0, 5))
+
+        self.copy_btn = ttk.Button(ctrl_frame, text="📋 Копировать", command=self.copy_to_clipboard)
+        self.copy_btn.pack(side="left")
+
+        # --- Таблица истории ---
+        hist_frame = ttk.LabelFrame(self.root, text="История генераций", padding=10)
+        hist_frame.pack(fill="both", expand=True, padx=10, pady=5)
+
+        columns = ("id", "password", "length", "types", "timestamp")
+        self.tree = ttk.Treeview(hist_frame, columns=columns, show="headings", height=8)
+        self.tree.heading("id", text="#")
+        self.tree.heading("password", text="Пароль")
+        self.tree.heading("length", text="Длина")
+        self.tree.heading("types", text="Состав")
+        self.tree.heading("timestamp", text="Время")
+
+        self.tree.column("id", width=40, anchor="center")
+        self.tree.column("password", width=220)
+        self.tree.column("length", width=50, anchor="center")
+        self.tree.column("types", width=140)
+        self.tree.column("timestamp", width=150, anchor="center")
+
+        scroll = ttk.Scrollbar(hist_frame, orient="vertical", command=self.tree.yview)
+        self.tree.configure(yscroll=scroll.set)
+        self.tree.pack(side="left", fill="both", expand=True)
+        scroll.pack(side="right", fill="y")
+
+        self.refresh_history_ui()
+
+    def generate_password(self):
+        # ✅ Валидация чекбоксов
+        if not any([self.use_upper.get(), self.use_lower.get(), self.use_digits.get(), self.use_special.get()]):
+            messagebox.showwarning("Валидация", "Выберите хотя бы один набор символов!")
+            return
+
+        length = int(self.length_var.get())
+        # ✅ Валидация длины
+        if not (MIN_LEN <= length <= MAX_LEN):
+            messagebox.showwarning("Валидация", f"Длина должна быть от {MIN_LEN} до {MAX_LEN}.")
+            return
+
+        # Формирование пула символов
+        pool = ""
+        types = []
+        if self.use_upper.get(): pool += string.ascii_uppercase; types.append("Upper")
+        if self.use_lower.get(): pool += string.ascii_lowercase; types.append("Lower")
+        if self.use_digits.get(): pool += string.digits; types.append("Digits")
+        if self.use_special.get(): pool += string.punctuation; types.append("Special")
+
+        # Генерация
+        password = "".join(random.choice(pool) for _ in range(length))
+
+        # Обновление интерфейса
+        self.password_entry.delete(0, tk.END)
+        self.password_entry.insert(0, password)
+
+        # Сохранение в историю
+        record = {
+            "password": password,
+            "length": length,
+            "types": ", ".join(types),
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
+        self.history.insert(0, record)
+        self.refresh_history_ui()
+        self.save_history()
+
+    def copy_to_clipboard(self):
+        pwd = self.password_entry.get()
+        if not pwd:
+            messagebox.showinfo("Инфо", "Сначала сгенерируйте пароль.")
+            return
+        self.root.clipboard_clear()
+        self.root.clipboard_append(pwd)
+        messagebox.showinfo("Успех", "Пароль скопирован в буфер обмена!")
+
+    def refresh_history_ui(self):
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+        for i, rec in enumerate(self.history, 1):
+            self.tree.insert("", "end", values=(i, rec["password"], rec["length"], rec["types"], rec["timestamp"]))
+
+    def load_history(self):
+        if os.path.exists(HISTORY_FILE):
+            try:
+                with open(HISTORY_FILE, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    self.history = data.get("history", [])
+            except (json.JSONDecodeError, IOError):
+                self.history = []
+
+    def save_history(self):
+        try:
+            with open(HISTORY_FILE, "w", encoding="utf-8") as f:
+                json.dump({"history": self.history}, f, indent=2, ensure_ascii=False)
+        except IOError as e:
+            messagebox.showerror("Ошибка", f"Не удалось сохранить историю: {e}")
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = PasswordGeneratorApp(root)
+    root.mainloop()
